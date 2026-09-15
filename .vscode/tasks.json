@@ -1,0 +1,32 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "make",
+            "args": ["-j"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "make",
+            "args": ["clean"],
+            "problemMatcher": []
+        },
+        {
+            "label": "grant BLE capabilities",
+            "type": "shell",
+            "command": "sudo",
+            "args": ["setcap", "cap_net_raw,cap_net_admin+eip", "${workspaceFolder}/bin/bluetooth_reader"],
+            "dependsOn": "build",
+            "detail": "Allows debugging/running the scanner without sudo by granting raw socket capabilities directly on the binary.",
+            "problemMatcher": []
+        }
+    ]
+}
