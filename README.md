@@ -1,13 +1,15 @@
 # BluetoothReader
 
 A small C++ command-line tool that reads BLE (Bluetooth Low Energy)
-advertisement data from a local Bluetooth adapter using BlueZ.
+advertisement data and GATT services from a local Bluetooth adapter using BlueZ.
 
 ## Layout
 
 - `include/BleAdvertisementReader.h` / `src/BleAdvertisementReader.cpp` — reusable
   class that opens an HCI device, enables LE scanning, and parses advertising
   reports (address, RSSI, local name, manufacturer data).
+- `include/GattClient.h` / `src/GattClient.cpp` — ATT-over-L2CAP GATT client
+  supporting service discovery, characteristic discovery, and value reads.
 - `include/SensorPushReader.h` / `src/SensorPushReader.cpp` — SensorPush second-generation
   GATT client for temperature, relative humidity, pressure, and battery voltage.
 - `src/main.cpp` — CLI entry point that prints advertisements as they arrive.
@@ -31,6 +33,18 @@ sudo bin/bluetooth_reader --scan 1     # scan on hci1
 ```
 
 Press `Ctrl+C` to stop scanning.
+
+## GATT
+
+Connect to a device and list its services and characteristics:
+
+```sh
+sudo bin/bluetooth_reader --gatt AA:BB:CC:DD:EE:FF
+sudo bin/bluetooth_reader --gatt AA:BB:CC:DD:EE:FF random
+```
+
+The optional `random` argument selects a random peer address. A final HCI device
+index can be supplied when more than one adapter is present.
 
 ## Read a SensorPush sensor
 

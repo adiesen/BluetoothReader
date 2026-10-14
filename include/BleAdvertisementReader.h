@@ -16,6 +16,11 @@ struct Advertisement {
     std::vector<uint8_t> manufacturerData; // from AD type 0xFF, if present
     uint16_t manufacturerId = 0;
     std::vector<uint8_t> rawData; // full AD payload, unparsed
+    bool hasTemperature = false;
+    double temperatureCelsius = 0.0;
+    bool hasH5127Data = false;
+    bool presenceDetected = false;
+    bool motionDetected = false;
 };
 
 using AdvertisementCallback = std::function<void(const Advertisement&)>;

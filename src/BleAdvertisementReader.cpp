@@ -54,6 +54,48 @@ void parseAdStructures(const uint8_t* data, uint8_t length, Advertisement& out) 
     }
 }
 
+bool decodeGoveeTemperature(Advertisement& adv) {
+    if (adv.manufacturerId != 0xEC88) {
+        return false;
+    }
+
+    const auto& data = adv.manufacturerData;
+    if (data.size() == 6) {
+        // H5072/H5075: 24-bit signed temperature/humidity value.
+        uint32_t encoded = (static_cast<uint32_t>(data[1]) << 16) |
+                           (static_cast<uint32_t>(data[2]) << 8) | data[3];
+        bool negative = (encoded & 0x800000) != 0;
+        encoded &= 0x7FFFFF;
+        double temperature = static_cast<double>(encoded / 1000) / 10.0;
+        adv.temperatureCelsius = negative ? -temperature : temperature;
+    } else if (data.size() >= 7) {
+        // H5074: signed little-endian temperature in hundredths of a degree.
+        // Some firmware revisions append optional bytes to this payload.
+        int16_t encoded = static_cast<int16_t>(data[1] |
+                                               (static_cast<uint16_t>(data[2]) << 8));
+        adv.temperatureCelsius = static_cast<double>(encoded) / 100.0;
+    } else {
+        return false;
+    }
+
+    adv.hasTemperature = adv.temperatureCelsius >= -40.0 &&
+                         adv.temperatureCelsius <= 100.0;
+    return adv.hasTemperature;
+}
+
+bool decodeGoveeH5127(Advertisement& adv) {
+    if (adv.manufacturerId != 0x8843 || adv.manufacturerData.size() != 6) {
+        return false;
+    }
+
+    // H5127: byte 4 indicates presence and byte 5 indicates motion.
+    const auto& data = adv.manufacturerData;
+    adv.presenceDetected = data[4] == 1;
+    adv.motionDetected = data[5] == 17;
+    adv.hasH5127Data = true;
+    return true;
+}
+
 } // namespace
 
 BleAdvertisementReader::BleAdvertisementReader(int deviceId) : deviceId_(deviceId) {}
@@ -95,10 +137,10 @@ void BleAdvertisementReader::close() {
 }
 
 bool BleAdvertisementReader::setScanParameters() {
-    // Passive scan, 10ms interval/window, public own address, no filter.
+    // Passive scan with the maximum interval and window for continuous scanning.
     uint8_t scanType = 0x00;         // passive
-    uint16_t interval = htobs(0x0010);
-    uint16_t window = htobs(0x0010);
+    uint16_t interval = htobs(0x4000);
+    uint16_t window = htobs(0x4000);
     uint8_t ownType = 0x00;          // public device address
     uint8_t filterPolicy = 0x00;     // accept all advertisements
 
@@ -172,19 +214,34 @@ bool BleAdvertisementReader::startScan(const AdvertisementCallback& callback) {
             continue;
         }
 
+        uint8_t reportCount = meta->data[0];
         const uint8_t* reportPtr = meta->data + 1; // skip num_reports byte
-        auto* info = reinterpret_cast<const le_advertising_info*>(reportPtr);
+        const uint8_t* packetEnd = buf + len;
+        for (uint8_t report = 0; report < reportCount; ++report) {
+            if (reportPtr + LE_ADVERTISING_INFO_SIZE + 1 > packetEnd) {
+                break;
+            }
 
-        Advertisement adv;
-        adv.address = bdaddrToString(info->bdaddr);
-        adv.addressIsRandom = (info->bdaddr_type == LE_RANDOM_ADDRESS);
-        parseAdStructures(info->data, info->length, adv);
+            auto* info = reinterpret_cast<const le_advertising_info*>(reportPtr);
+            size_t reportLength = LE_ADVERTISING_INFO_SIZE + info->length + 1;
+            if (reportPtr + reportLength > packetEnd) {
+                break;
+            }
 
-        // RSSI is a signed byte appended right after the variable-length AD data.
-        int8_t rssi = static_cast<int8_t>(reportPtr[LE_ADVERTISING_INFO_SIZE + info->length]);
-        adv.rssi = rssi;
+            Advertisement adv;
+            adv.address = bdaddrToString(info->bdaddr);
+            adv.addressIsRandom = (info->bdaddr_type == LE_RANDOM_ADDRESS);
+            parseAdStructures(info->data, info->length, adv);
 
-        callback(adv);
+            decodeGoveeTemperature(adv);
+            decodeGoveeH5127(adv);
+
+            // RSSI is a signed byte appended after the variable-length AD data.
+            adv.rssi = static_cast<int8_t>(reportPtr[LE_ADVERTISING_INFO_SIZE +
+                                                     info->length]);
+            callback(adv);
+            reportPtr += reportLength;
+        }
     }
 
     setScanEnable(false);

@@ -1,10 +1,13 @@
 #include "BleAdvertisementReader.h"
+#include "GattClient.h"
 #include "SensorPushReader.h"
 
 #include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -17,8 +20,17 @@ void handleSignal(int) {
 }
 
 void printAdvertisement(const ble::Advertisement& adv) {
-    std::printf("%s (%s)  RSSI=%d dBm", adv.address.c_str(),
-                adv.addressIsRandom ? "random" : "public", adv.rssi);
+    std::printf("%s (%s)", adv.address.c_str(),
+                adv.addressIsRandom ? "random" : "public");
+    if (adv.hasTemperature) {
+        std::printf("  temperature=%.1f C", adv.temperatureCelsius);
+    }
+    if (adv.hasH5127Data) {
+        std::printf("  H5127 presence=%s motion=%s",
+                    adv.presenceDetected ? "yes" : "no",
+                    adv.motionDetected ? "yes" : "no");
+    }
+    std::printf("  RSSI=%d dBm", adv.rssi);
     if (!adv.name.empty()) {
         std::printf("  name=\"%s\"", adv.name.c_str());
     }
@@ -27,6 +39,10 @@ void printAdvertisement(const ble::Advertisement& adv) {
         for (uint8_t b : adv.manufacturerData) {
             std::printf("%02X", b);
         }
+    }
+    std::printf("  advertisement=");
+    for (uint8_t b : adv.rawData) {
+        std::printf("%02X", b);
     }
     std::printf("\n");
 }
@@ -39,7 +55,48 @@ void printUsage(const char* program) {
 
 } // namespace
 
+int runGatt(int argc, char** argv) {
+    if (argc < 3 || argc > 5) {
+        std::fprintf(stderr, "Usage: %s --gatt ADDRESS [public|random] [hci-device]\n", argv[0]);
+        return 2;
+    }
+
+    bool randomAddress = argc >= 4 && std::string(argv[3]) == "random";
+    int deviceId = argc == 5 ? std::atoi(argv[4]) : -1;
+    ble::GattClient client(deviceId);
+    if (!client.connect(argv[2], randomAddress)) {
+        std::fprintf(stderr, "GATT connection failed: %s\n", client.lastError().c_str());
+        return 1;
+    }
+
+    std::vector<ble::GattService> services;
+    if (!client.discoverServices(services)) {
+        std::fprintf(stderr, "Service discovery failed: %s\n", client.lastError().c_str());
+        return 1;
+    }
+    for (const auto& service : services) {
+        std::printf("service 0x%04X-0x%04X uuid=%s\n", service.startHandle,
+                    service.endHandle, service.uuid.c_str());
+        std::vector<ble::GattCharacteristic> characteristics;
+        if (!client.discoverCharacteristics(service, characteristics)) {
+            std::fprintf(stderr, "Characteristic discovery failed: %s\n",
+                         client.lastError().c_str());
+            return 1;
+        }
+        for (const auto& characteristic : characteristics) {
+            std::printf("  characteristic declaration=0x%04X value=0x%04X properties=0x%02X uuid=%s\n",
+                        characteristic.declarationHandle, characteristic.valueHandle,
+                        characteristic.properties, characteristic.uuid.c_str());
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--gatt") {
+        return runGatt(argc, argv);
+    }
+
     if (argc > 1 && std::string(argv[1]) == "--help") {
         printUsage(argv[0]);
         return 0;
