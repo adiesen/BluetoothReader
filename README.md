@@ -19,7 +19,7 @@ advertisement data and GATT services from a local Bluetooth adapter using BlueZ.
 ## Build
 
 ```sh
-make install-deps   # one-time: installs build-essential + libbluetooth-dev
+make install-deps   # one-time: installs the C++ toolchain, BlueZ, and D-Bus development files
 make                # builds bin/bluetooth_reader
 ```
 
@@ -32,7 +32,7 @@ sudo bin/bluetooth_reader --scan       # scan on hci0
 sudo bin/bluetooth_reader --scan 1     # scan on hci1
 ```
 
-Press `Ctrl+C` to stop scanning.
+New SensorPush devices are read immediately. Known sensors are reread every 30 seconds. A 30-second discovery scan runs at startup and every 120 seconds to find new sensors. Press `q` or `Ctrl+C` to exit.
 
 ## GATT
 
@@ -60,4 +60,6 @@ Use `random` instead of `public` when the address is a random BLE address. The
 reader supports SensorPush second-generation devices; the first-generation HT1
 does not expose the documented GATT API. Temperature and humidity are returned
 in degrees Celsius and percent, respectively. Pressure and battery are printed
-when those characteristics are present.
+when those characteristics are present. During scanning, the latest successful
+reading and its refresh timestamp are cached per sensor; a failed refresh prints
+that cached snapshot when one is available.

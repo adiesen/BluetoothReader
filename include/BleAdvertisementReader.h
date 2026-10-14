@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -13,6 +15,7 @@ struct Advertisement {
     bool addressIsRandom = false;
     int rssi = 0;                // dBm, or 127 if unavailable
     std::string name;            // from AD type 0x08/0x09, if present
+    bool hasSensorPushService = false;
     std::vector<uint8_t> manufacturerData; // from AD type 0xFF, if present
     uint16_t manufacturerId = 0;
     std::vector<uint8_t> rawData; // full AD payload, unparsed
@@ -49,7 +52,10 @@ public:
     // Enables LE scanning and blocks, invoking `callback` for each
     // advertisement received, until stop() is called from another thread
     // or a signal handler.
-    bool startScan(const AdvertisementCallback& callback);
+    bool startScan(const AdvertisementCallback& callback,
+                   std::chrono::milliseconds timeout =
+                       std::chrono::milliseconds::zero(),
+                   const std::atomic<bool>* cancellationRequested = nullptr);
 
     // Requests that a running startScan() loop return as soon as possible.
     void stop();
@@ -59,7 +65,7 @@ public:
 private:
     int deviceId_;
     int socketFd_ = -1;
-    volatile bool stopRequested_ = false;
+    std::atomic<bool> stopRequested_{false};
     std::string lastError_;
 
     bool setScanParameters();

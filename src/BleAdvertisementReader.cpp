@@ -4,8 +4,12 @@
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
+#include <climits>
 #include <cstring>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -13,10 +17,35 @@ namespace ble {
 
 namespace {
 
+constexpr uint8_t kSensorPushServiceUuid[16] = {
+    0xB0, 0x0A, 0x09, 0xEC, 0xD7, 0x9D, 0xB8, 0x93,
+    0xBA, 0x42, 0xD6, 0x11, 0x00, 0x00, 0x09, 0xEF
+};
+
 std::string bdaddrToString(const bdaddr_t& addr) {
     char buf[18] = {0};
     ba2str(&addr, buf);
     return std::string(buf);
+}
+
+bool hasSensorPushServiceUuid(uint8_t adType, const uint8_t* value, size_t valueLen) {
+    if (adType == 0x21) {
+        return valueLen >= sizeof(kSensorPushServiceUuid) &&
+               std::memcmp(value, kSensorPushServiceUuid,
+                           sizeof(kSensorPushServiceUuid)) == 0;
+    }
+    if (adType != 0x06 && adType != 0x07) {
+        return false;
+    }
+
+    for (size_t offset = 0; offset + sizeof(kSensorPushServiceUuid) <= valueLen;
+         offset += sizeof(kSensorPushServiceUuid)) {
+        if (std::memcmp(value + offset, kSensorPushServiceUuid,
+                        sizeof(kSensorPushServiceUuid)) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Parses the concatenated AD (Advertising Data) structures found in a
@@ -33,6 +62,9 @@ void parseAdStructures(const uint8_t* data, uint8_t length, Advertisement& out) 
         uint8_t adType = data[offset + 1];
         const uint8_t* value = data + offset + 2;
         size_t valueLen = fieldLen - 1;
+        if (hasSensorPushServiceUuid(adType, value, valueLen)) {
+            out.hasSensorPushService = true;
+        }
 
         switch (adType) {
             case 0x08: // Shortened Local Name
@@ -163,10 +195,15 @@ bool BleAdvertisementReader::setScanEnable(bool enable) {
     return true;
 }
 
-bool BleAdvertisementReader::startScan(const AdvertisementCallback& callback) {
+bool BleAdvertisementReader::startScan(const AdvertisementCallback& callback,
+                                       std::chrono::milliseconds timeout,
+                                       const std::atomic<bool>* cancellationRequested) {
     if (socketFd_ < 0) {
         lastError_ = "Device not open; call open() first";
         return false;
+    }
+    if (cancellationRequested != nullptr && cancellationRequested->load()) {
+        return true;
     }
 
     struct hci_filter oldFilter;
@@ -190,10 +227,50 @@ bool BleAdvertisementReader::startScan(const AdvertisementCallback& callback) {
         return false;
     }
 
-    stopRequested_ = false;
+    stopRequested_.store(false);
     uint8_t buf[HCI_MAX_EVENT_SIZE];
+    const bool hasDeadline = timeout > std::chrono::milliseconds::zero();
+    const auto deadline = hasDeadline
+                              ? std::chrono::steady_clock::now() + timeout
+                              : std::chrono::steady_clock::time_point::max();
 
-    while (!stopRequested_) {
+    while (!stopRequested_.load() &&
+           (cancellationRequested == nullptr || !cancellationRequested->load())) {
+        int timeoutMs = 100;
+        if (hasDeadline) {
+            const auto remaining = deadline - std::chrono::steady_clock::now();
+            if (remaining <= std::chrono::steady_clock::duration::zero()) {
+                break;
+            }
+            auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   remaining).count();
+            timeoutMs = static_cast<int>(std::min<int64_t>(
+                std::max<int64_t>(remainingMs, 1), std::min(100, INT_MAX)));
+        }
+
+        pollfd descriptor{socketFd_, POLLIN, 0};
+        int pollResult = ::poll(&descriptor, 1, timeoutMs);
+        if (pollResult == 0) {
+            if (hasDeadline && std::chrono::steady_clock::now() >= deadline) {
+                break;
+            }
+            continue;
+        }
+        if (pollResult < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            lastError_ = std::string("Error waiting for HCI events: ") + std::strerror(errno);
+            break;
+        }
+        if ((descriptor.revents & POLLIN) == 0) {
+            if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                lastError_ = "HCI socket closed while scanning";
+                break;
+            }
+            continue;
+        }
+
         ssize_t len = read(socketFd_, buf, sizeof(buf));
         if (len < 0) {
             if (errno == EINTR || errno == EAGAIN) {
@@ -250,7 +327,7 @@ bool BleAdvertisementReader::startScan(const AdvertisementCallback& callback) {
 }
 
 void BleAdvertisementReader::stop() {
-    stopRequested_ = true;
+    stopRequested_.store(true);
 }
 
 } // namespace ble

@@ -15,6 +15,7 @@ struct SensorPushReading {
 
 // Connects to a second-generation SensorPush device and reads its GATT values.
 bool readSensorPush(const std::string& address, bool addressIsRandom,
-                    SensorPushReading& reading, std::string& error);
+                    SensorPushReading& reading, std::string& error,
+                    int deviceId = 0);
 
 } // namespace ble
